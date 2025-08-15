@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TLeap Writer — Browser GUI</title>
+  <style>
+    :root { --bg:#0b1220; --panel:#10192b; --card:#0f1a31; --text:#e6edff; --muted:#9db0d0; --accent:#8ab4ff; --ok:#53d37c; --warn:#ffd166; --bad:#ff6b6b; }
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif}
+    header{padding:16px 20px;border-bottom:1px solid #17223a;background:linear-gradient(180deg,#0f1a31,#0b1220)}
+    h1{margin:0;font-size:18px;letter-spacing:.3px}
+    main{display:grid;grid-template-columns:320px 1fr;gap:16px;padding:16px}
+    .panel{background:var(--panel);border:1px solid #17223a;border-radius:12px;overflow:hidden}
+    .panel h2{margin:0;padding:12px 14px;font-size:13px;color:var(--muted);border-bottom:1px solid #17223a;background:#0e1830}
+    .panel .body{padding:14px}
+    label{display:block;margin:8px 0 6px;color:var(--muted);font-size:12px}
+    input[type="text"], textarea, select {width:100%;background:#0b1427;border:1px solid #18243e;color:var(--text);border-radius:8px;padding:9px 10px;box-sizing:border-box}
+    input[type="file"]{width:100%}
+    .row{display:flex;gap:8px}
+    .row>*{flex:1}
+    .btn{background:#162543;color:#fff;border:1px solid #284374;border-radius:10px;padding:9px 12px;cursor:pointer}
+    .btn:hover{background:#1a2d52}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+    .chip{padding:4px 8px;border-radius:999px;background:#10203f;border:1px solid #2a3d66;color:#c7d7ff;font-size:12px}
+    table{width:100%;border-collapse:separate;border-spacing:0}
+    th,td{padding:10px 12px;border-bottom:1px solid #17223a;vertical-align:top}
+    th{position:sticky;top:0;background:#0e1830;font-size:12px;color:var(--muted);text-align:left}
+    tbody tr:hover{background:#0d1730}
+    .status{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+    .dot{width:8px;height:8px;border-radius:50%}
+    .ok{background:var(--ok)} .warn{background:var(--warn)} .bad{background:var(--bad)} .muted{background:#4a5a7d}
+    pre{white-space:pre;overflow:auto;max-height:360px;background:#0a1427;border:1px solid #18243e;border-radius:10px;padding:10px}
+    .stack{display:flex;flex-direction:column;gap:10px}
+    .small{font-size:12px;color:var(--muted)}
+    .kbd{display:inline-block;padding:1px 6px;border-radius:6px;border:1px solid #23365d;background:#0b1530;color:#d7e3ff}
+    .twocol{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .note{font-size:12px;color:var(--muted)}
+    .footer{padding:10px 16px;color:#8ea6d8;border-top:1px solid #17223a;background:#0e1830}
+    a.link{color:var(--accent)}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>TLeap Writer — Browser GUI (no backend)</h1>
+    <div class="small">Load a PDB, auto-detect ligands, attach frcmod/mol2/off, verify, and generate a minimal <span class="kbd">tleap.in</span>.</div>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>1) Inputs</h2>
+      <div class="body stack">
+        <div>
+          <label>PDB file</label>
+          <input id="pdbFile" type="file" accept=".pdb,.ent,.txt" />
+          <div class="chips" id="pdbMeta"></div>
+        </div>
+        <div>
+          <label>Hybridization notes (optional TSV/CSV)</label>
+          <input id="hybFile" type="file" accept=".tsv,.csv,.dat,.txt" />
+        </div>
+        <div>
+          <label>Load leaprc presets</label>
+          <div>
+            <label><input type="checkbox" id="ff_protein" checked /> leaprc.protein.ff19SB</label>
+            <label><input type="checkbox" id="ff_gaff2" checked /> leaprc.gaff2</label>
+            <label><input type="checkbox" id="ff_tip3p" checked /> leaprc.water.tip3p</label>
+            <label><input type="checkbox" id="ff_ions" checked disabled /> frcmod.ionsjc_tip3p (always included)</label>
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn" id="scanBtn">Scan PDB</button>
+          <button class="btn" id="verifyBtn" disabled>Verify attached files</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>2) Ligands & Attachments</h2>
+      <div class="body">
+        <div class="note">Non-standard residues are listed below. Attach <code>frcmod</code> and either <code>mol2</code> (preferred) or <code>lib/off</code> for each ligand instance.</div>
+        <div style="overflow:auto;max-height:360px;margin-top:8px">
+          <table id="ligTable">
+            <thead>
+              <tr>
+                <th>Ligand (ResName/Chain/ResSeq)</th>
+                <th>PDB atoms</th>
+                <th>frcmod</th>
+                <th>mol2 or lib/off</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>3) LINK → bond lines</h2>
+      <div class="body stack">
+        <div class="note">LINK records from the PDB are converted into <code>bond COMPLEX.resid.atom</code> commands.</div>
+        <pre id="linkPreview">(scan a PDB to see LINK-derived bonds)</pre>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>4) Output</h2>
+      <div class="body stack">
+        <div class="row">
+          <button class="btn" id="genBtn" disabled>Generate tleap.in</button>
+          <button class="btn" id="dlHybBtn" disabled>Download hybridization notes</button>
+        </div>
+        <div class="twocol">
+          <div>
+            <label>tleap.in preview</label>
+            <pre id="outPreview">(generate to preview)</pre>
+          </div>
+          <div>
+            <label>Messages</label>
+            <pre id="logBox"></pre>
+          </div>
+        </div>
+      </div>
+      <div class="footer small">Tip: place all uploaded frcmod/mol2/off files next to <span class="kbd">tleap.in</span> before running <span class="kbd">tleap -f tleap.in</span>.</div>
+    </section>
+  </main>
+
+  <script>
+  // --- small helpers ---
+  const $ = sel => document.querySelector(sel);
+  const $tbl = sel => document.querySelector(sel);
+  function log(msg){ const box = $('#logBox'); box.textContent += msg + "\n"; box.scrollTop = box.scrollHeight; }
+  function chip(text){ const el = document.createElement('span'); el.className='chip'; el.textContent=text; return el; }
+  function downloadText(filename, text){ const blob = new Blob([text], {type:'text/plain'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 0); }
+
+  // --- PDB parsing & ligand detection ---
+  const STD_RES = new Set(['ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS','ILE','LEU','LYS','MET','PHE','PRO','SER','THR','TRP','TYR','VAL','MSE','ACE','NME']);
+  const WATER = new Set(['HOH','WAT','TIP','T3P','H2O']);
+  const IONS = new Set(['NA','K','CL','MG','ZN','CA','FE','MN','CU','CO','NI','HG','CD','SR','BA','AL','AG','LI','RB','CS']);
+
+  let pdbText = '';
+  let ligands = []; // [{key,resName,chain,resSeq,atoms:[{name,serial}] }]
+  let linkBonds = []; // [{a1:{resSeq,atom,resName}, a2:{...}}]
+
+  function parsePDB(text){
+    pdbText = text;
+    log('Loaded PDB: ' + text.length + ' chars');
+
+    const lines = text.split(/\r?\n/);
+    const atomLines = lines.filter(l => l.startsWith('ATOM') || l.startsWith('HETATM'));
+    const byResid = new Map();
+
+    for(const l of atomLines){
+      const rec = l.slice(0,6).trim();
+      const atom = l.slice(12,16).trim();
+      const resName = l.slice(17,20).trim();
+      const chain = l.slice(21,22).trim() || '-';
+      const resSeq = l.slice(22,26).trim();
+      const serial = l.slice(6,11).trim();
+      const key = `${resName}|${chain}|${resSeq}`;
+      if(!byResid.has(key)) byResid.set(key, {key,resName,chain,resSeq,atoms:[]});
+      byResid.get(key).atoms.push({name:atom, serial});
+    }
+
+    // detect ligands: HETATM residues that are not standard aa/water/ions, plus non-standard ATOM residues
+    ligands = [];
+    for(const [key,obj] of byResid){
+      const r = obj.resName;
+      const isWater = WATER.has(r);
+      const isIon = IONS.has(r);
+      const isStandard = STD_RES.has(r);
+      // if residue appears only as HETATM? we didn't keep per-line record type; fallback heuristic: non-standard and not water/ion
+      if(!isWater && !isIon && !isStandard){ ligands.push(obj); }
+    }
+
+    // parse LINK records
+    linkBonds = [];
+    for(const l of lines){
+      if(l.startsWith('LINK')){
+        // columns per PDB v3.3 format
+        const a1 = l.slice(12,16).trim();
+        const r1 = l.slice(17,20).trim();
+        const c1 = (l.slice(21,22).trim()||'-');
+        const s1 = l.slice(22,26).trim();
+        const a2 = l.slice(42,46).trim();
+        const r2 = l.slice(47,50).trim();
+        const c2 = (l.slice(51,52).trim()||'-');
+        const s2 = l.slice(52,56).trim();
+        linkBonds.push({ a1:{atom:a1,resName:r1,chain:c1,resSeq:s1}, a2:{atom:a2,resName:r2,chain:c2,resSeq:s2} });
+      }
+    }
+
+    renderLigandTable();
+    renderLinkBonds();
+  }
+
+  function renderLinkBonds(){
+    if(!linkBonds.length){ $('#linkPreview').textContent = '(no LINK records found)'; return; }
+    const lines = [];
+    for(const b of linkBonds){
+      lines.push(`bond COMPLEX.${b.a1.resSeq}.${b.a1.atom} COMPLEX.${b.a2.resSeq}.${b.a2.atom}`);
+    }
+    $('#linkPreview').textContent = lines.join('\n');
+  }
+
+  // --- Table + attachments state ---
+  const attachState = new Map(); // key -> {frcmodFile, mol2File, offFile, verify:{ok,msg}}
+
+  function renderLigandTable(){
+    const tbody = $('#ligTable tbody');
+    tbody.innerHTML = '';
+    if(!ligands.length){
+      const tr = document.createElement('tr');
+      const td = document.createElement('td'); td.colSpan=5; td.textContent='No non-standard residues found.'; td.className='small';
+      tr.appendChild(td); tbody.appendChild(tr); return;
+    }
+    for(const lig of ligands){
+      const tr = document.createElement('tr');
+      tr.dataset.key = lig.key;
+      const td0 = document.createElement('td');
+      td0.innerHTML = `<strong>${lig.resName}</strong> / chain <code>${lig.chain}</code> / resid <code>${lig.resSeq}</code>`;
+      const td1 = document.createElement('td');
+      td1.textContent = lig.atoms.length;
+      const td2 = document.createElement('td');
+      const frc = document.createElement('input'); frc.type='file'; frc.accept='.frcmod,.dat,.txt'; frc.onchange = e=>{ setAttach(lig.key, 'frcmodFile', e.target.files[0]||null); };
+      td2.appendChild(frc);
+      const td3 = document.createElement('td');
+      const mol2 = document.createElement('input'); mol2.type='file'; mol2.accept='.mol2'; mol2.onchange = e=>{ setAttach(lig.key,'mol2File', e.target.files[0]||null); clearAttach(lig.key,'offFile'); };
+      const off = document.createElement('input'); off.type='file'; off.accept='.lib,.off'; off.onchange = e=>{ setAttach(lig.key,'offFile', e.target.files[0]||null); clearAttach(lig.key,'mol2File'); };
+      td3.appendChild(mol2); td3.appendChild(document.createElement('br')); td3.appendChild(off);
+      const td4 = document.createElement('td');
+      const st = document.createElement('div'); st.className='status'; st.innerHTML='<span class="dot muted"></span><span class="msg">waiting</span>';
+      td4.appendChild(st);
+      tr.append(td0,td1,td2,td3,td4);
+      tbody.appendChild(tr);
+    }
+    $('#verifyBtn').disabled = false;
+    $('#genBtn').disabled = false;
+  }
+
+  function setAttach(key, field, file){
+    if(!attachState.has(key)) attachState.set(key,{});
+    attachState.get(key)[field] = file;
+    // reset status
+    const row = [...document.querySelectorAll('#ligTable tbody tr')].find(r => r.dataset.key===key);
+    if(row){ const dot = row.querySelector('.dot'); const msg = row.querySelector('.msg'); if(dot&&msg){ dot.className='dot muted'; msg.textContent='waiting'; } }
+  }
+  function clearAttach(key, field){ if(!attachState.has(key)) return; attachState.get(key)[field]=null; }
+
+  // --- MOL2 & OFF minimal verifiers ---
+  async function readFileText(file){ return await file.text(); }
+
+  function countMol2Atoms(text){
+    const lines = text.split(/\r?\n/);
+    let inAtoms=false, inBonds=false; let count=0; let typesOk=true; const errs=[];
+    for(const l of lines){
+      if(l.startsWith('@<TRIPOS>ATOM')){ inAtoms=true; inBonds=false; continue; }
+      if(l.startsWith('@<TRIPOS>BOND')){ inAtoms=false; inBonds=true; continue; }
+      if(inAtoms && l.trim()){
+        const toks = l.trim().split(/\s+/);
+        // mol2 atom line: id name x y z type [subid] [subname] [charge]
+        if(toks.length<6){ typesOk=false; errs.push('ATOM line with <6 tokens: '+l.trim()); }
+        else { const atype = toks[5]; if(!atype || atype==='UNL'){ typesOk=false; errs.push('Empty/UNL atom_type on '+toks[1]); } }
+        count++;
+      }
+    }
+    return {count, typesOk, errs};
+  }
+
+  function parseOFFUnits(text){
+    // VERY lightweight OFF parser: split by "UNIT <name>" blocks; inside, find section starting with "atoms" and ending before next section (bonds, residues, ...)
+    const units = new Map();
+    const lines = text.split(/\r?\n/);
+    for(let i=0;i<lines.length;i++){
+      const m = lines[i].match(/^\s*UNIT\s+(\S+)/);
+      if(m){
+        const name = m[1].toUpperCase();
+        // find "atoms" line
+        let j=i+1; while(j<lines.length && !/^\s*atoms\b/i.test(lines[j])) j++;
+        if(j>=lines.length) continue;
+        j++; let count=0;
+        while(j<lines.length && !/^\s*(bonds|residues|impropers|donors|acceptors|end)\b/i.test(lines[j])){
+          const ln = lines[j].trim();
+          if(ln && !/^\s*#/i.test(ln)) count++;
+          j++;
+        }
+        units.set(name, {atomCount:count});
+      }
+    }
+    return units; // Map name -> {atomCount}
+  }
+
+  async function verifyAll(){
+    if(!ligands.length){ log('No ligands to verify.'); return; }
+    for(const lig of ligands){
+      const row = [...document.querySelectorAll('#ligTable tbody tr')].find(r => r.dataset.key===lig.key);
+      const dot = row.querySelector('.dot'); const msg = row.querySelector('.msg');
+      let status='warn'; let message='No files attached';
+      const att = attachState.get(lig.key)||{};
+      const needCount = lig.atoms.length;
+
+      if(att.mol2File){
+        const text = await readFileText(att.mol2File);
+        const {count, typesOk, errs} = countMol2Atoms(text);
+        if(count===needCount && typesOk){ status='ok'; message=`mol2 atoms ${count} ✓ types ok`; }
+        else if(count!==needCount){ status='bad'; message=`mol2 atoms ${count} ≠ PDB ${needCount}`; }
+        else { status='bad'; message = 'mol2 atom_type issues: '+(errs[0]||'unknown'); }
+      } else if(att.offFile){
+        const text = await readFileText(att.offFile);
+        const units = parseOFFUnits(text);
+        const u = units.get(lig.resName.toUpperCase());
+        if(!u){ status='bad'; message=`OFF has no UNIT ${lig.resName}`; }
+        else if(u.atomCount===needCount){ status='ok'; message=`OFF atoms ${u.atomCount} match`; }
+        else { status='bad'; message=`OFF atoms ${u.atomCount} ≠ PDB ${needCount}`; }
+      } else {
+        status='warn'; message='Attach mol2 or lib/off';
+      }
+
+      if(att.frcmodFile){ message += ' | frcmod ✓'; }
+      else { message += ' | frcmod missing'; if(status==='ok') status='warn'; }
+
+      dot.className = 'dot ' + (status==='ok'?'ok':status==='bad'?'bad':'warn');
+      msg.textContent = message;
+    }
+    log('Verification complete.');
+  }
+
+  // --- tleap.in synthesis ---
+  function synthesizeTLeap(){
+    if(!pdbText){ alert('Load and scan a PDB first.'); return ''; }
+    const pdbName = ($('#pdbFile').files[0]?.name)||'your.pdb';
+    const lines = [];
+    // sources
+    if($('#ff_protein').checked) lines.push('source leaprc.protein.ff19SB');
+    if($('#ff_gaff2').checked)  lines.push('source leaprc.gaff2');
+    if($('#ff_tip3p').checked)  lines.push('source leaprc.water.tip3p');
+    lines.push('loadamberparams frcmod.ionsjc_tip3p');
+
+    // per-ligand params/libs
+    for(const lig of ligands){
+      const att = attachState.get(lig.key)||{};
+      if(att.frcmodFile){ lines.push(`loadamberparams ${att.frcmodFile.name}`); }
+      if(att.mol2File){ lines.push(`loadmol2 ${att.mol2File.name}`); }
+      else if(att.offFile){ lines.push(`loadoff ${att.offFile.name}`); }
+    }
+
+    lines.push('COMPLEX = loadpdb "'+pdbName+'"');
+
+    // LINK bonds
+    for(const b of linkBonds){
+      lines.push(`bond COMPLEX.${b.a1.resSeq}.${b.a1.atom} COMPLEX.${b.a2.resSeq}.${b.a2.atom}`);
+    }
+
+    lines.push('check COMPLEX');
+    lines.push('saveamberparm COMPLEX complex.prmtop complex.inpcrd');
+    lines.push('savepdb COMPLEX complex_sanitized.pdb');
+    lines.push('quit');
+
+    return lines.join('\n');
+  }
+
+  // --- Hybridization sidecar passthrough ---
+  let hybText = '';
+  function loadHybridization(file){
+    if(!file){ hybText=''; $('#dlHybBtn').disabled=true; return; }
+    file.text().then(t=>{ hybText=t; $('#dlHybBtn').disabled=false; log('Hybridization notes loaded ('+t.length+' chars).'); });
+  }
+
+  // --- events ---
+  $('#scanBtn').addEventListener('click', async ()=>{
+    const file = $('#pdbFile').files[0];
+    if(!file){ alert('Choose a PDB file first.'); return; }
+    const text = await file.text();
+    $('#pdbMeta').innerHTML='';
+    $('#pdbMeta').appendChild(chip(file.name));
+    const sizeKB = (file.size/1024).toFixed(1);
+    $('#pdbMeta').appendChild(chip(sizeKB+' KB'));
+    parsePDB(text);
+  });
+
+  $('#verifyBtn').addEventListener('click', verifyAll);
+
+  $('#genBtn').addEventListener('click', ()=>{
+    const out = synthesizeTLeap();
+    if(!out) return;
+    $('#outPreview').textContent = out;
+    downloadText('tleap.in', out);
+  });
+
+  $('#dlHybBtn').addEventListener('click', ()=>{
+    if(!hybText){ alert('No hybridization file loaded.'); return; }
+    downloadText('Hybridization_Info.dat', hybText);
+  });
+
+  $('#hybFile').addEventListener('change', (e)=> loadHybridization(e.target.files[0]||null));
+
+  // --- Load an optional built-in Hybridization_Info.dat if present (for demo) ---
+  // Users can just upload their own; no network here.
+  </script>
+</body>
+</html>
